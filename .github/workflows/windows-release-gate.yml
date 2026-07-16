@@ -19,7 +19,9 @@ jobs:
       - name: Decode and expand StoreManagement source
         shell: pwsh
         run: |
-          $encoded = Get-Content -LiteralPath "StoreManagement-source.zip.b64" -Raw
+          $parts = Get-ChildItem -LiteralPath $PWD -Filter "StoreManagement-source.zip.b64.part*" -File | Sort-Object Name
+          if ($parts.Count -eq 0) { throw "Source payload parts were not found." }
+          $encoded = ($parts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join ""
           [IO.File]::WriteAllBytes(
             (Join-Path $PWD "StoreManagement-source.zip"),
             [Convert]::FromBase64String($encoded)
@@ -44,7 +46,7 @@ jobs:
       - name: Upload release artifacts and test evidence
         uses: actions/upload-artifact@v4
         with:
-          name: StoreManagement-v0.6.7-windows-x64
+          name: StoreManagement-v0.7.0-windows-x64
           path: |
             work/artifacts/publish/**
             work/artifacts/installer/*.exe
