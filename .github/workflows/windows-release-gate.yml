@@ -19,9 +19,33 @@ jobs:
       - name: Decode, verify, and expand StoreManagement source
         shell: pwsh
         run: |
-          $parts = Get-ChildItem -LiteralPath $PWD -Filter "StoreManagement-source.7z.b64.part*" -File | Sort-Object Name
-          if ($parts.Count -eq 0) { throw "Source payload parts were not found." }
-          $encoded = ($parts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join ""
+          $partNames = @(
+            "StoreManagement-source.7z.b64.part00",
+            "StoreManagement-source.7z.b64.part01",
+            "StoreManagement-source.7z.b64.part03",
+            "StoreManagement-source.7z.b64.part05",
+            "StoreManagement-source.7z.b64.part07",
+            "StoreManagement-source.7z.b64.part09",
+            "StoreManagement-source.7z.b64.part11",
+            "StoreManagement-source.7z.b64.part13",
+            "StoreManagement-source.7z.b64.tail15",
+            "StoreManagement-source.7z.b64.tail16",
+            "StoreManagement-source.7z.b64.tail17",
+            "StoreManagement-source.7z.b64.tail18",
+            "StoreManagement-source.7z.b64.tail19_20",
+            "StoreManagement-source.7z.b64.tail21_22"
+          )
+
+          foreach ($partName in $partNames) {
+            if (-not (Test-Path -LiteralPath $partName)) {
+              throw "Source payload part is missing: $partName"
+            }
+          }
+
+          $encoded = ($partNames | ForEach-Object {
+            Get-Content -LiteralPath $_ -Raw
+          }) -join ""
+
           $archive = Join-Path $PWD "StoreManagement-source.7z"
           [IO.File]::WriteAllBytes($archive, [Convert]::FromBase64String($encoded))
 
@@ -33,7 +57,9 @@ jobs:
 
           New-Item -ItemType Directory -Path "work" -Force | Out-Null
           & 7z x $archive "-owork" -y
-          if ($LASTEXITCODE -ne 0) { throw "7-Zip source expansion failed. Exit code: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip source expansion failed. Exit code: $LASTEXITCODE"
+          }
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v4
