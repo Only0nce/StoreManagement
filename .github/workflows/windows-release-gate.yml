@@ -16,16 +16,112 @@ jobs:
       - name: Checkout validation payload
         uses: actions/checkout@v4
 
-      - name: Decode and expand StoreManagement source
+      - name: Decode, verify, and expand StoreManagement source
         shell: pwsh
         run: |
-          $encoded = Get-Content -LiteralPath "StoreManagement-source.zip.b64" -Raw
-          [IO.File]::WriteAllBytes(
-            (Join-Path $PWD "StoreManagement-source.zip"),
-            [Convert]::FromBase64String($encoded)
+          $partNames = @(
+            "StoreManagement-source.7z.b64.part00",
+            "StoreManagement-source.7z.b64.part01",
+            "StoreManagement-source.7z.b64.part03",
+            "StoreManagement-source.7z.b64.part05",
+            "StoreManagement-source.7z.b64.part07",
+            "StoreManagement-source.7z.b64.part09",
+            "StoreManagement-source.7z.b64.part11",
+            "StoreManagement-source.7z.b64.part13",
+            "StoreManagement-source.7z.b64.tail15",
+            "StoreManagement-source.7z.b64.tail16",
+            "StoreManagement-source.7z.b64.tail17",
+            "StoreManagement-source.7z.b64.tail17_suffix",
+            "StoreManagement-source.7z.b64.tail18",
+            "StoreManagement-source.7z.b64.tail18_suffix",
+            "StoreManagement-source.7z.b64.tail19_20",
+            "StoreManagement-source.7z.b64.tail21_22"
           )
+
+          foreach ($partName in $partNames) {
+            if (-not (Test-Path -LiteralPath $partName)) {
+              throw "Source payload part is missing: $partName"
+            }
+          }
+
+          $expectedHash = (Get-Content -LiteralPath "StoreManagement-source.7z.sha256" -Raw).Trim().ToLowerInvariant()
+          $diagnostics = New-Object System.Collections.Generic.List[string]
+          $diagnostics.Add("expected_archive_sha256=$expectedHash")
+
+          $rawSegments = foreach ($partName in $partNames) {
+            $text = Get-Content -LiteralPath $partName -Raw
+            $segment = $text -replace '[^A-Za-z0-9+/=]', ''
+            $diagnostics.Add("raw:$partName=$($segment.Length)")
+            $segment
+          }
+          $rawCandidate = $rawSegments -join ""
+
+          $strippedSegments = foreach ($partName in $partNames) {
+            $lines = Get-Content -LiteralPath $partName
+            $normalized = foreach ($line in $lines) {
+              $value = $line.Trim()
+              if ($partName -like "*.tail*") {
+                $value = $value -replace '^\+', ''
+              }
+              $value
+            }
+            $segment = (($normalized -join "") -replace '[^A-Za-z0-9+/=]', '')
+            $diagnostics.Add("stripped:$partName=$($segment.Length)")
+            $segment
+          }
+          $strippedCandidate = $strippedSegments -join ""
+
+          $candidates = [ordered]@{
+            raw = $rawCandidate
+            stripped_line_prefix_plus = $strippedCandidate
+          }
+
+          $archive = Join-Path $PWD "StoreManagement-source.7z"
+          $selected = $null
+
+          foreach ($entry in $candidates.GetEnumerator()) {
+            $name = $entry.Key
+            $encoded = $entry.Value
+            $diagnostics.Add("candidate:${name}:length=$($encoded.Length)")
+            try {
+              $bytes = [Convert]::FromBase64String($encoded)
+              $candidatePath = Join-Path $PWD "candidate-$name.7z"
+              [IO.File]::WriteAllBytes($candidatePath, $bytes)
+              $candidateHash = (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+              $diagnostics.Add("candidate:${name}:size=$($bytes.Length):sha256=$candidateHash")
+              if ($candidateHash -eq $expectedHash) {
+                Copy-Item -LiteralPath $candidatePath -Destination $archive -Force
+                $selected = $name
+                break
+              }
+            }
+            catch {
+              $diagnostics.Add("candidate:${name}:decode_error=$($_.Exception.Message)")
+            }
+          }
+
+          $diagnostics.Add("selected_candidate=$selected")
+          $diagnostics | Set-Content -LiteralPath "payload-diagnostics.txt" -Encoding UTF8
+          Get-Content -LiteralPath "payload-diagnostics.txt"
+
+          if (-not $selected) {
+            throw "No reconstructed source payload matched the expected SHA-256."
+          }
+
           New-Item -ItemType Directory -Path "work" -Force | Out-Null
-          Expand-Archive -LiteralPath "StoreManagement-source.zip" -DestinationPath "work" -Force
+          & 7z x $archive "-owork" -y
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip source expansion failed. Exit code: $LASTEXITCODE"
+          }
+
+      - name: Upload payload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: StoreManagement-v0.7.0-payload-diagnostics
+          path: payload-diagnostics.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v4
@@ -44,7 +140,7 @@ jobs:
       - name: Upload release artifacts and test evidence
         uses: actions/upload-artifact@v4
         with:
-          name: StoreManagement-v0.6.7-windows-x64
+          name: StoreManagement-v0.7.0-windows-x64
           path: |
             work/artifacts/publish/**
             work/artifacts/installer/*.exe
