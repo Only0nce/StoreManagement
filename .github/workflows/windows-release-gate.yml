@@ -42,39 +42,68 @@ jobs:
             }
           }
 
-          $segmentDiagnostics = New-Object System.Collections.Generic.List[string]
-          $segments = foreach ($partName in $partNames) {
-            $normalizedLines = foreach ($line in (Get-Content -LiteralPath $partName)) {
-              $normalizedLine = $line.Trim()
-              if ($partName -like "*.tail*") {
-                $normalizedLine = $normalizedLine -replace '^\+', ''
-              }
-              $normalizedLine
-            }
-            $segment = ($normalizedLines -join "") -replace '\s', ''
-            $segmentDiagnostics.Add("$partName=$($segment.Length)")
+          $expectedHash = (Get-Content -LiteralPath "StoreManagement-source.7z.sha256" -Raw).Trim().ToLowerInvariant()
+          $diagnostics = New-Object System.Collections.Generic.List[string]
+          $diagnostics.Add("expected_archive_sha256=$expectedHash")
+
+          $rawSegments = foreach ($partName in $partNames) {
+            $text = Get-Content -LiteralPath $partName -Raw
+            $segment = $text -replace '[^A-Za-z0-9+/=]', ''
+            $diagnostics.Add("raw:$partName=$($segment.Length)")
             $segment
           }
+          $rawCandidate = $rawSegments -join ""
 
-          $encoded = ($segments -join "") -replace '\s', ''
+          $strippedSegments = foreach ($partName in $partNames) {
+            $lines = Get-Content -LiteralPath $partName
+            $normalized = foreach ($line in $lines) {
+              $value = $line.Trim()
+              if ($partName -like "*.tail*") {
+                $value = $value -replace '^\+', ''
+              }
+              $value
+            }
+            $segment = (($normalized -join "") -replace '[^A-Za-z0-9+/=]', '')
+            $diagnostics.Add("stripped:$partName=$($segment.Length)")
+            $segment
+          }
+          $strippedCandidate = $strippedSegments -join ""
+
+          $candidates = [ordered]@{
+            raw = $rawCandidate
+            stripped_line_prefix_plus = $strippedCandidate
+          }
+
           $archive = Join-Path $PWD "StoreManagement-source.7z"
-          [IO.File]::WriteAllBytes($archive, [Convert]::FromBase64String($encoded))
+          $selected = $null
 
-          $expectedHash = (Get-Content -LiteralPath "StoreManagement-source.7z.sha256" -Raw).Trim().ToLowerInvariant()
-          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          foreach ($entry in $candidates.GetEnumerator()) {
+            $name = $entry.Key
+            $encoded = $entry.Value
+            $diagnostics.Add("candidate:$name:length=$($encoded.Length)")
+            try {
+              $bytes = [Convert]::FromBase64String($encoded)
+              $candidatePath = Join-Path $PWD "candidate-$name.7z"
+              [IO.File]::WriteAllBytes($candidatePath, $bytes)
+              $candidateHash = (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+              $diagnostics.Add("candidate:$name:size=$($bytes.Length):sha256=$candidateHash")
+              if ($candidateHash -eq $expectedHash) {
+                Copy-Item -LiteralPath $candidatePath -Destination $archive -Force
+                $selected = $name
+                break
+              }
+            }
+            catch {
+              $diagnostics.Add("candidate:$name:decode_error=$($_.Exception.Message)")
+            }
+          }
 
-          @(
-            "normalized_base64_length=$($encoded.Length)",
-            "expected_archive_sha256=$expectedHash",
-            "actual_archive_sha256=$actualHash",
-            "archive_size=$((Get-Item -LiteralPath $archive).Length)",
-            $segmentDiagnostics
-          ) | Set-Content -LiteralPath "payload-diagnostics.txt" -Encoding UTF8
-
+          $diagnostics.Add("selected_candidate=$selected")
+          $diagnostics | Set-Content -LiteralPath "payload-diagnostics.txt" -Encoding UTF8
           Get-Content -LiteralPath "payload-diagnostics.txt"
 
-          if ($actualHash -ne $expectedHash) {
-            throw "Source payload SHA-256 mismatch."
+          if (-not $selected) {
+            throw "No reconstructed source payload matched the expected SHA-256."
           }
 
           New-Item -ItemType Directory -Path "work" -Force | Out-Null
