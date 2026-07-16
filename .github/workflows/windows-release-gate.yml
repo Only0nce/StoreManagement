@@ -31,7 +31,9 @@ jobs:
             "StoreManagement-source.7z.b64.tail15",
             "StoreManagement-source.7z.b64.tail16",
             "StoreManagement-source.7z.b64.tail17",
+            "StoreManagement-source.7z.b64.tail17_suffix",
             "StoreManagement-source.7z.b64.tail18",
+            "StoreManagement-source.7z.b64.tail18_suffix",
             "StoreManagement-source.7z.b64.tail19_20",
             "StoreManagement-source.7z.b64.tail21_22"
           )
@@ -80,13 +82,13 @@ jobs:
           foreach ($entry in $candidates.GetEnumerator()) {
             $name = $entry.Key
             $encoded = $entry.Value
-            $diagnostics.Add("candidate:$name:length=$($encoded.Length)")
+            $diagnostics.Add("candidate:${name}:length=$($encoded.Length)")
             try {
               $bytes = [Convert]::FromBase64String($encoded)
               $candidatePath = Join-Path $PWD "candidate-$name.7z"
               [IO.File]::WriteAllBytes($candidatePath, $bytes)
               $candidateHash = (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
-              $diagnostics.Add("candidate:$name:size=$($bytes.Length):sha256=$candidateHash")
+              $diagnostics.Add("candidate:${name}:size=$($bytes.Length):sha256=$candidateHash")
               if ($candidateHash -eq $expectedHash) {
                 Copy-Item -LiteralPath $candidatePath -Destination $archive -Force
                 $selected = $name
@@ -94,7 +96,7 @@ jobs:
               }
             }
             catch {
-              $diagnostics.Add("candidate:$name:decode_error=$($_.Exception.Message)")
+              $diagnostics.Add("candidate:${name}:decode_error=$($_.Exception.Message)")
             }
           }
 
