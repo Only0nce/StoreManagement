@@ -1,0 +1,1 @@
+Trigger the StoreManagement v0.7.0 Windows release gate after the complete source payload and checksum are present.
