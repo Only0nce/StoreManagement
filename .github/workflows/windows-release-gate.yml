@@ -42,9 +42,19 @@ jobs:
             }
           }
 
-          $encoded = ($partNames | ForEach-Object {
-            Get-Content -LiteralPath $_ -Raw
-          }) -join ""
+          $segments = foreach ($partName in $partNames) {
+            $lines = Get-Content -LiteralPath $partName
+            foreach ($line in $lines) {
+              $normalizedLine = $line.Trim()
+              if ($partName -like "*.tail*") {
+                $normalizedLine = $normalizedLine -replace '^\+', ''
+              }
+              $normalizedLine
+            }
+          }
+
+          $encoded = ($segments -join "") -replace '\s', ''
+          Write-Host "Normalized Base64 length: $($encoded.Length)"
 
           $archive = Join-Path $PWD "StoreManagement-source.7z"
           [IO.File]::WriteAllBytes($archive, [Convert]::FromBase64String($encoded))
