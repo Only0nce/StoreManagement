@@ -42,27 +42,39 @@ jobs:
             }
           }
 
+          $segmentDiagnostics = New-Object System.Collections.Generic.List[string]
           $segments = foreach ($partName in $partNames) {
-            $lines = Get-Content -LiteralPath $partName
-            foreach ($line in $lines) {
+            $normalizedLines = foreach ($line in (Get-Content -LiteralPath $partName)) {
               $normalizedLine = $line.Trim()
               if ($partName -like "*.tail*") {
                 $normalizedLine = $normalizedLine -replace '^\+', ''
               }
               $normalizedLine
             }
+            $segment = ($normalizedLines -join "") -replace '\s', ''
+            $segmentDiagnostics.Add("$partName=$($segment.Length)")
+            $segment
           }
 
           $encoded = ($segments -join "") -replace '\s', ''
-          Write-Host "Normalized Base64 length: $($encoded.Length)"
-
           $archive = Join-Path $PWD "StoreManagement-source.7z"
           [IO.File]::WriteAllBytes($archive, [Convert]::FromBase64String($encoded))
 
           $expectedHash = (Get-Content -LiteralPath "StoreManagement-source.7z.sha256" -Raw).Trim().ToLowerInvariant()
           $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          @(
+            "normalized_base64_length=$($encoded.Length)",
+            "expected_archive_sha256=$expectedHash",
+            "actual_archive_sha256=$actualHash",
+            "archive_size=$((Get-Item -LiteralPath $archive).Length)",
+            $segmentDiagnostics
+          ) | Set-Content -LiteralPath "payload-diagnostics.txt" -Encoding UTF8
+
+          Get-Content -LiteralPath "payload-diagnostics.txt"
+
           if ($actualHash -ne $expectedHash) {
-            throw "Source payload SHA-256 mismatch. Expected=$expectedHash Actual=$actualHash"
+            throw "Source payload SHA-256 mismatch."
           }
 
           New-Item -ItemType Directory -Path "work" -Force | Out-Null
@@ -70,6 +82,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "7-Zip source expansion failed. Exit code: $LASTEXITCODE"
           }
+
+      - name: Upload payload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: StoreManagement-v0.7.0-payload-diagnostics
+          path: payload-diagnostics.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v4
